@@ -2,6 +2,9 @@ import math
 from typing import Optional
 from pydantic import BaseModel
 
+# Delta triangle pointing right (+x): nose, body, upper-rear wing, lower-rear wing
+DELTA_TRIANGLE: list[tuple[int, int]] = [(1, 0), (0, 0), (-1, 1), (-1, -1)]
+
 
 class Entity(BaseModel):
     id: str
@@ -10,6 +13,8 @@ class Entity(BaseModel):
     speed: float
     spawn_time: float = 0.0
     waypoints: list[tuple[float, float]]
+    shape: list[tuple[int, int]] | None = None
+    rotate_with_heading: bool = False
 
     def position_at(self, time: float) -> Optional[tuple[float, float]]:
         if time < self.spawn_time or not self.waypoints:
@@ -27,6 +32,23 @@ class Entity(BaseModel):
             accumulated += seg_dur
         return self.waypoints[-1]
 
+    def heading_at(self, time: float) -> float:
+        if len(self.waypoints) < 2:
+            return 0.0
+        elapsed = max(0.0, time - self.spawn_time)
+        accumulated = 0.0
+        for i in range(len(self.waypoints) - 1):
+            x0, y0 = self.waypoints[i]
+            x1, y1 = self.waypoints[i + 1]
+            dist = math.sqrt((x1 - x0) ** 2 + (y1 - y0) ** 2)
+            seg_dur = dist / self.speed
+            if elapsed <= accumulated + seg_dur:
+                return math.atan2(y1 - y0, x1 - x0)
+            accumulated += seg_dur
+        x0, y0 = self.waypoints[-2]
+        x1, y1 = self.waypoints[-1]
+        return math.atan2(y1 - y0, x1 - x0)
+
     def is_active(self, time: float) -> bool:
         return time >= self.spawn_time and bool(self.waypoints)
 
@@ -35,8 +57,21 @@ class Entity(BaseModel):
         if pos is None:
             return set()
         cx, cy = round(pos[0]), round(pos[1])
-        offsets = range(-(self.size // 2), (self.size + 1) // 2)
-        return {(cx + dx, cy + dy) for dx in offsets for dy in offsets}
+
+        if self.shape is not None:
+            offsets = self.shape
+            if self.rotate_with_heading:
+                angle = self.heading_at(time)
+                cos_a, sin_a = math.cos(angle), math.sin(angle)
+                offsets = [
+                    (round(dx * cos_a - dy * sin_a), round(dx * sin_a + dy * cos_a))
+                    for dx, dy in offsets
+                ]
+        else:
+            r = range(-(self.size // 2), (self.size + 1) // 2)
+            offsets = [(dx, dy) for dx in r for dy in r]
+
+        return {(cx + dx, cy + dy) for dx, dy in offsets}
 
 
 class Collision(BaseModel):
@@ -82,20 +117,12 @@ class Simulation(BaseModel):
             collision_cells.update(c.cells)
 
         for entity in self.entities:
-            pos = entity.position_at(self.current_time)
-            if pos is None:
-                continue
-            cx, cy = round(pos[0]), round(pos[1])
-            offsets = range(-(entity.size // 2), (entity.size + 1) // 2)
-            for dy in offsets:
-                for dx in offsets:
-                    gx, gy = cx + dx, cy + dy
-                    row = self.height - 1 - gy
-                    if 0 <= gx < self.width and 0 <= row < self.height:
-                        grid[row][gx] = "!" if (gx, gy) in collision_cells else entity.symbol
+            for gx, gy in entity.footprint(self.current_time):
+                row = self.height - 1 - gy
+                if 0 <= gx < self.width and 0 <= row < self.height:
+                    grid[row][gx] = "!" if (gx, gy) in collision_cells else entity.symbol
 
-        lines: list[str] = []
-        lines.append(f"t={self.current_time:.1f}  tick={self.tick_count}")
+        lines: list[str] = [f"t={self.current_time:.1f}  tick={self.tick_count}"]
         if collisions:
             for c in collisions:
                 lines.append(f"  COLLISION: {c.entity_a} x {c.entity_b} at {c.cells}")

@@ -1,4 +1,4 @@
-from simulation import Entity, Simulation
+from simulation import DELTA_TRIANGLE, Entity, Simulation
 
 sim = Simulation(width=30, height=15, tick_size=1.0)
 
@@ -10,6 +10,8 @@ sim.entities.append(Entity(
     speed=1.0,
     spawn_time=0.0,
     waypoints=[(0, 0), (29, 14)],
+    shape=DELTA_TRIANGLE,
+    rotate_with_heading=True,
 ))
 
 # Stationary objects (single waypoint = never moves)
